@@ -1,0 +1,27 @@
+[project]
+name = "mcp-shell"
+version = "0.1.0"
+description = "MCP server for command and script execution"
+authors = [
+    {name = "Martin Smith", email = "msmith@bitmonster.org"}
+]
+dependencies = [
+    "fastmcp>=0.1.0",
+    "aiohttp>=3.8.0"
+]
+requires-python = ">=3.8"
+readme = "README.md"
+license = {text = "MIT"}
+
+[project.scripts]
+mcp-shell = "mcp_shell.server:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mcp_shell = ["py.typed"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
