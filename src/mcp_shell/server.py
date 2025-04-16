@@ -9,6 +9,7 @@ import socket
 from functools import wraps
 from dataclasses import dataclass
 from typing import List, Dict, Optional, Any, Callable, TypeVar, Union, Awaitable
+import re
 
 F = TypeVar('F', bound=Callable[..., Union[Any, Awaitable[Any]]])
 
@@ -54,6 +55,35 @@ def with_sys_info() -> Callable[[F], F]:
         # Choose the appropriate wrapper based on whether the function is async
         wrapper = async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
         wrapper.__doc__ = original_doc + sys_info_str
+        
+        return wrapper
+    return decorator
+
+def hostname_suffix() -> Callable[[F], F]:
+    """Decorator that renames the function by appending a sanitized hostname.
+    
+    This ensures unique function names across different machines running the same MCP server.
+    The hostname is sanitized to only include alphanumeric characters and underscores.
+    """
+    def decorator(func: F) -> F:
+        # Get hostname and sanitize it
+        hostname = socket.gethostname().lower()
+        sanitized_hostname = re.sub(r'[^a-z0-9_]', '_', hostname)
+        
+        # Create wrapper with the same signature
+        @wraps(func)
+        async def async_wrapper(*args, **kwargs):
+            return await func(*args, **kwargs)
+            
+        @wraps(func)
+        def sync_wrapper(*args, **kwargs):
+            return func(*args, **kwargs)
+            
+        # Choose appropriate wrapper
+        wrapper = async_wrapper if asyncio.iscoroutinefunction(func) else sync_wrapper
+        
+        # Rename the function
+        wrapper.__name__ = f"{func.__name__}_{sanitized_hostname}"
         
         return wrapper
     return decorator
@@ -188,6 +218,7 @@ def format_result(result: CommandResult) -> List[Dict[str, str]]:
     return messages
 
 @mcp.tool()
+@hostname_suffix()
 @with_sys_info()
 async def run_command(ctx: Context, command: str, cwd: Optional[str] = None) -> str:
     """Run a shell command.
@@ -210,6 +241,7 @@ async def run_command(ctx: Context, command: str, cwd: Optional[str] = None) -> 
     })
 
 @mcp.tool()
+@hostname_suffix()
 @with_sys_info()
 async def run_script(ctx: Context, interpreter: str, script: str, cwd: Optional[str] = None) -> str:
     """Run a script using the specified interpreter.
