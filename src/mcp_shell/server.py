@@ -275,6 +275,18 @@ async def run_server(args: argparse.Namespace):
     # Update server settings
     mcp.settings.host = args.host
     mcp.settings.port = args.port
+    
+    # Configure error handling for stale sessions
+    mcp.settings.error_handlers = {
+        "session_expired": lambda: json.dumps({
+            "isError": True,
+            "content": [{
+                "type": "text",
+                "text": "Session expired due to server restart. Please reconnect with a new session.",
+                "name": "ERROR"
+            }]
+        })
+    }
 
     if args.server:
         # Run the MCP server with SSE transport
