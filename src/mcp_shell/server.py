@@ -8,10 +8,10 @@ import platform
 import socket
 from functools import wraps
 from dataclasses import dataclass
-from typing import List, Dict, Optional, Any, Callable, TypeVar, Union, Awaitable
+from typing import List, Dict, Optional, Callable, TypeVar
 import re
 
-F = TypeVar('F', bound=Callable[..., Union[Any, Awaitable[Any]]])
+F = TypeVar('F', bound=Callable)
 
 def with_sys_info() -> Callable[[F], F]:
     """Decorator that adds system information to a function's docstring.
@@ -276,18 +276,6 @@ async def run_server(args: argparse.Namespace):
     mcp.settings.host = args.host
     mcp.settings.port = args.port
     
-    # Configure error handling for stale sessions
-    mcp.settings.error_handlers = {
-        "session_expired": lambda: json.dumps({
-            "isError": True,
-            "content": [{
-                "type": "text",
-                "text": "Session expired due to server restart. Please reconnect with a new session.",
-                "name": "ERROR"
-            }]
-        })
-    }
-
     if args.server:
         # Run the MCP server with SSE transport
         await mcp.run_sse_async()
