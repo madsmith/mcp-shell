@@ -8,8 +8,12 @@ import platform
 import socket
 from functools import wraps
 from dataclasses import dataclass
-from typing import List, Dict, Optional, Callable, TypeVar
+from typing import List, Dict, Optional, Callable, TypeVar, Union
 import re
+import signal
+from pathlib import Path
+import aiofiles
+import aiofiles.os
 
 F = TypeVar('F', bound=Callable)
 
@@ -93,29 +97,6 @@ mcp = FastMCP(
     "mcp-shell",
     description="MCP server for command and script execution"
 )
-
-def parse_args() -> argparse.Namespace:
-    """Parse command line arguments."""
-    parser = argparse.ArgumentParser(
-        description="MCP server for command and script execution"
-    )
-    parser.add_argument(
-        "--server",
-        action="store_true",
-        help="Run in SSE server mode (default: stdio mode)"
-    )
-    parser.add_argument(
-        "-p", "--port",
-        type=int,
-        default=8050,
-        help="Port to run the server on (default: 8050)"
-    )
-    parser.add_argument(
-        "-H", "--host",
-        default="0.0.0.0",
-        help="Host to run the server on (default: 0.0.0.0)"
-    )
-    return parser.parse_args()
 
 @dataclass
 class CommandResult:
@@ -217,6 +198,29 @@ def format_result(result: CommandResult) -> List[Dict[str, str]]:
     
     return messages
 
+@dataclass
+class FileInfo:
+    """Information about a file."""
+    name: str
+    path: str
+    size: int
+    is_directory: bool
+    modified_time: float
+    created_time: float
+
+async def get_file_info(path: str) -> FileInfo:
+    """Get information about a file or directory."""
+    path_obj = Path(path)
+    stat = await aiofiles.os.stat(path)
+    return FileInfo(
+        name=path_obj.name,
+        path=str(path_obj.absolute()),
+        size=stat.st_size,
+        is_directory=path_obj.is_dir(),
+        modified_time=stat.st_mtime,
+        created_time=stat.st_ctime
+    )
+
 @mcp.tool()
 @hostname_suffix()
 @with_sys_info()
@@ -270,6 +274,179 @@ async def run_script(ctx: Context, interpreter: str, script: str, cwd: Optional[
         "content": format_result(result)
     })
 
+@mcp.tool()
+@hostname_suffix()
+@with_sys_info()
+async def read_file(ctx: Context, path: str) -> str:
+    """Read the contents of a file.
+
+    Args:
+        ctx: The MCP server context
+        path: Path to the file to read
+    """
+    try:
+        async with aiofiles.open(path, mode='r') as f:
+            content = await f.read()
+        return json.dumps({
+            "isError": False,
+            "content": [{"type": "text", "text": content, "name": "CONTENT"}]
+        })
+    except Exception as e:
+        return json.dumps({
+            "isError": True,
+            "content": [{"type": "text", "text": str(e), "name": "ERROR"}]
+        })
+
+@mcp.tool()
+@hostname_suffix()
+@with_sys_info()
+async def read_multiple_files(ctx: Context, paths: List[str]) -> str:
+    """Read the contents of multiple files.
+
+    Args:
+        ctx: The MCP server context
+        paths: List of paths to read
+    """
+    results = []
+    for path in paths:
+        try:
+            async with aiofiles.open(path, mode='r') as f:
+                content = await f.read()
+                results.append({
+                    "path": path,
+                    "content": content,
+                    "error": None
+                })
+        except Exception as e:
+            results.append({
+                "path": path,
+                "content": None,
+                "error": str(e)
+            })
+    
+    return json.dumps({
+        "isError": any(r["error"] is not None for r in results),
+        "content": [{"type": "text", "text": json.dumps(results, indent=2), "name": "RESULTS"}]
+    })
+
+@mcp.tool()
+@hostname_suffix()
+@with_sys_info()
+async def write_file(ctx: Context, path: str, content: str, create_dirs: bool = False) -> str:
+    """Write content to a file.
+
+    Args:
+        ctx: The MCP server context
+        path: Path to write to
+        content: Content to write
+        create_dirs: Whether to create parent directories if they don't exist
+    """
+    try:
+        if create_dirs:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            
+        async with aiofiles.open(path, mode='w') as f:
+            await f.write(content)
+            
+        return json.dumps({
+            "isError": False,
+            "content": [{"type": "text", "text": f"Successfully wrote to {path}", "name": "SUCCESS"}]
+        })
+    except Exception as e:
+        return json.dumps({
+            "isError": True,
+            "content": [{"type": "text", "text": str(e), "name": "ERROR"}]
+        })
+
+@mcp.tool()
+@hostname_suffix()
+@with_sys_info()
+async def create_directory(ctx: Context, path: str, exist_ok: bool = False) -> str:
+    """Create a directory.
+
+    Args:
+        ctx: The MCP server context
+        path: Path to create
+        exist_ok: Whether to ignore if directory already exists
+    """
+    try:
+        await aiofiles.os.makedirs(path, exist_ok=exist_ok)
+        return json.dumps({
+            "isError": False,
+            "content": [{"type": "text", "text": f"Successfully created directory {path}", "name": "SUCCESS"}]
+        })
+    except Exception as e:
+        return json.dumps({
+            "isError": True,
+            "content": [{"type": "text", "text": str(e), "name": "ERROR"}]
+        })
+
+@mcp.tool()
+@hostname_suffix()
+@with_sys_info()
+async def list_directory(ctx: Context, path: str) -> str:
+    """List contents of a directory.
+
+    Args:
+        ctx: The MCP server context
+        path: Path to list
+    """
+    try:
+        entries = []
+        async for entry in aiofiles.os.scandir(path):
+            info = await get_file_info(entry.path)
+            entries.append({
+                "name": info.name,
+                "path": info.path,
+                "size": info.size,
+                "is_directory": info.is_directory,
+                "modified_time": info.modified_time,
+                "created_time": info.created_time
+            })
+            
+        return json.dumps({
+            "isError": False,
+            "content": [{"type": "text", "text": json.dumps(entries, indent=2), "name": "ENTRIES"}]
+        })
+    except Exception as e:
+        return json.dumps({
+            "isError": True,
+            "content": [{"type": "text", "text": str(e), "name": "ERROR"}]
+        })
+
+@mcp.tool()
+@hostname_suffix()
+@with_sys_info()
+async def get_file_info_tool(ctx: Context, path: str) -> str:
+    """Get information about a file or directory.
+
+    Args:
+        ctx: The MCP server context
+        path: Path to get info for
+    """
+    try:
+        info = await get_file_info(path)
+        return json.dumps({
+            "isError": False,
+            "content": [{
+                "type": "text",
+                "text": json.dumps({
+                    "name": info.name,
+                    "path": info.path,
+                    "size": info.size,
+                    "is_directory": info.is_directory,
+                    "modified_time": info.modified_time,
+                    "created_time": info.created_time
+                }, indent=2),
+                "name": "INFO"
+            }]
+        })
+    except Exception as e:
+        return json.dumps({
+            "isError": True,
+            "content": [{"type": "text", "text": str(e), "name": "ERROR"}]
+        })
+
 async def run_server(args: argparse.Namespace):
     """Run the MCP server with the specified arguments."""
     # Update server settings
@@ -282,6 +459,29 @@ async def run_server(args: argparse.Namespace):
     else:
         # Run the MCP server with stdio transport
         await mcp.run_stdio_async()
+
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(
+        description="MCP server for command and script execution"
+    )
+    parser.add_argument(
+        "--server",
+        action="store_true",
+        help="Run in SSE server mode (default: stdio mode)"
+    )
+    parser.add_argument(
+        "-p", "--port",
+        type=int,
+        default=8050,
+        help="Port to run the server on (default: 8050)"
+    )
+    parser.add_argument(
+        "-H", "--host",
+        default="0.0.0.0",
+        help="Host to run the server on (default: 0.0.0.0)"
+    )
+    return parser.parse_args()
 
 def main():
     """Entry point for the MCP shell server."""
