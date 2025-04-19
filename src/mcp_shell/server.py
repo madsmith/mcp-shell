@@ -393,7 +393,8 @@ async def list_directory(ctx: Context, path: str) -> str:
     """
     try:
         entries = []
-        async for entry in aiofiles.os.scandir(path):
+        entries_iter = await aiofiles.os.scandir(path)
+        for entry in entries_iter:
             info = await get_file_info(entry.path)
             entries.append({
                 "name": info.name,
@@ -403,7 +404,6 @@ async def list_directory(ctx: Context, path: str) -> str:
                 "modified_time": info.modified_time,
                 "created_time": info.created_time
             })
-            
         return json.dumps({
             "isError": False,
             "content": [{"type": "text", "text": json.dumps(entries, indent=2), "name": "ENTRIES"}]
